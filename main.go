@@ -3,11 +3,15 @@ package main
 import (
 	"LIDAR/LIDAR_DRIVER"
 	"LIDAR/LIDAR_VIZUALIZER"
-	"fmt"
+	_"fmt"
 	"gocv.io/x/gocv"
 	"sync"
 	"sync/atomic"
 	"time"
+	"os"
+	"fmt"
+	// "net/http"
+	// "github.com/gin-gonic/gin"
 )
 
 var points360 [360]lidardriver.ResultPoint
@@ -33,10 +37,10 @@ func main() {
 	go func() {
 		t := time.NewTicker(time.Second)
 		for range t.C {
-			fmt.Printf("LIDAR FPS: %d | Render FPS: %d\n",
-				atomic.SwapUint64(&lidarFPS, 0),
-				atomic.SwapUint64(&renderFPS, 0),
-			)
+			// fmt.Printf("LIDAR FPS: %d | Render FPS: %d\n",
+			// 	atomic.SwapUint64(&lidarFPS, 0),
+			// 	atomic.SwapUint64(&renderFPS, 0),
+			// )
 		}
 	}()
 
@@ -63,21 +67,44 @@ func main() {
 		window := gocv.NewWindow("Lidar")
 		windowMap := gocv.NewWindow("Map")
 
-		for {
-			img, pointsData := vizulizer.GetVizuliz()
-			imgMap := vizulizer.FormatMap(img, pointsData, 5.0)
+for {
+	img, pointsData := vizulizer.GetVizuliz()
+	imgMap := vizulizer.FormatMap(img, pointsData, 0.5)
 
-			atomic.AddUint64(&renderFPS, 1)
-			// window.ResizeWindow(vizulizer.Width, vizulizer.Height)
-			// windowMap.ResizeWindow(vizulizer.Width, vizulizer.Height)
-			window.IMShow(img)
-			windowMap.IMShow(imgMap)
+	atomic.AddUint64(&renderFPS, 1)
+	window.ResizeWindow(vizulizer.Width, vizulizer.Height)
+	windowMap.ResizeWindow(vizulizer.Width, vizulizer.Height)
+	window.IMShow(img)
+	windowMap.IMShow(imgMap)
 
-			img.Close()
-			imgMap.Close()
-			gocv.WaitKey(1)
+	key := gocv.WaitKey(1)
+	if key == 's' || key == 'S' {
+		fileName := "points_data.txt"
+		f, err := os.Create(fileName)
+		if err != nil {
+			fmt.Println("Ошибка при создании файла:", err)
+		} else {
+			for _, p := range points360 {
+				fmt.Fprintf(f, "%f\n", p.Dist)
+			}
+			fmt.Println("pointsData сохранён в", fileName)
 		}
+	}
+
+	img.Close()
+	imgMap.Close()
+}
+
 	}()
 
+	// go func() {
+	// 	router := gin.Default()
+	// 	router.GET("/ping", func(c *gin.Context){
+	// 		c.JSON(http.StatusOK, gin.H{
+	// 			"message": "pong",
+	// 		})
+	// 	})
+	// 	router.Run()
+	// } ()
 	select {}
 }

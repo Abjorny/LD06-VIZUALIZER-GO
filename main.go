@@ -1,110 +1,91 @@
 package main
 
 import (
-	"LIDAR/LIDAR_DRIVER"
-	"LIDAR/LIDAR_VIZUALIZER"
-	_"fmt"
-	"gocv.io/x/gocv"
+	"encoding/binary"
+	"log"
+	"net/http"
 	"sync"
-	"sync/atomic"
-	"time"
-	"os"
-	"fmt"
-	// "net/http"
-	// "github.com/gin-gonic/gin"
+	lidardriver "LIDAR/LIDAR_DRIVER"
+	"github.com/gorilla/websocket"
 )
 
 var points360 [360]lidardriver.ResultPoint
 var mu sync.Mutex
 
-var lidarFPS uint64
-var renderFPS uint64
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
+var clients = make(map[*websocket.Conn]bool)
+var clientsMu sync.Mutex
+
+func handleConnections(w http.ResponseWriter, r *http.Request) {
+	ws, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer ws.Close()
+
+	clientsMu.Lock()
+	clients[ws] = true
+	clientsMu.Unlock()
+
+	for {
+		if _, _, err := ws.NextReader(); err != nil {
+			break
+		}
+	}
+
+	clientsMu.Lock()
+	delete(clients, ws)
+	clientsMu.Unlock()
+}
+
+func broadcastPoints() {
+	buf := make([]byte, 360*5)
+	mu.Lock()
+	for i, p := range points360 {
+		binary.LittleEndian.PutUint16(buf[i*5:], uint16(p.Dist*1000))
+		buf[i*5+2] = byte(p.Intes)
+		binary.LittleEndian.PutUint16(buf[i*5+3:], uint16(p.Angle))
+	}
+	mu.Unlock()
+
+	clientsMu.Lock()
+	for ws := range clients {
+		if err := ws.WriteMessage(websocket.BinaryMessage, buf); err != nil {
+			log.Println("ws write error:", err)
+			ws.Close()
+			delete(clients, ws)
+		}
+	}
+	clientsMu.Unlock()
+}
 
 func main() {
-	lidar, err := lidardriver.NewLD06Driver("/dev/ttyUSB0")
+	lidar, err := lidardriver.NewLD06Driver("/dev/ttyUSB1")
 	if err != nil {
 		panic(err)
 	}
 
-	vizulizer := lidarvizualizer.NewVizulizerLD06(
-		700,
-		700,
-		&mu,
-		&points360,
-		2,
-	)
-
+	http.HandleFunc("/ws", handleConnections)
 	go func() {
-		t := time.NewTicker(time.Second)
-		for range t.C {
-			// fmt.Printf("LIDAR FPS: %d | Render FPS: %d\n",
-			// 	atomic.SwapUint64(&lidarFPS, 0),
-			// 	atomic.SwapUint64(&renderFPS, 0),
-			// )
-		}
+		log.Println("WebSocket server on :8000/ws")
+		log.Fatal(http.ListenAndServe(":8000", nil))
 	}()
 
-	go func() {
-		for {
-			results, err := lidar.ReadData()
-			if err != nil {
-				continue
-			}
-
-			atomic.AddUint64(&lidarFPS, 1)
-
-			mu.Lock()
-			for _, p := range results {
-				if p.Angle >= 0 && p.Angle < 360 {
-					points360[p.Angle] = p
-				}
-			}
-			mu.Unlock()
-		}
-	}()
-
-	go func() {
-		window := gocv.NewWindow("Lidar")
-		windowMap := gocv.NewWindow("Map")
-
-for {
-	img, pointsData := vizulizer.GetVizuliz()
-	imgMap := vizulizer.FormatMap(img, pointsData, 0.5)
-
-	atomic.AddUint64(&renderFPS, 1)
-	window.ResizeWindow(vizulizer.Width, vizulizer.Height)
-	windowMap.ResizeWindow(vizulizer.Width, vizulizer.Height)
-	window.IMShow(img)
-	windowMap.IMShow(imgMap)
-
-	key := gocv.WaitKey(1)
-	if key == 's' || key == 'S' {
-		fileName := "points_data.txt"
-		f, err := os.Create(fileName)
+	for {
+		results, err := lidar.ReadData()
 		if err != nil {
-			fmt.Println("Ошибка при создании файла:", err)
-		} else {
-			for _, p := range points360 {
-				fmt.Fprintf(f, "%f\n", p.Dist)
-			}
-			fmt.Println("pointsData сохранён в", fileName)
+			continue
 		}
+		mu.Lock()
+		for _, p := range results {
+			angle := int(p.Angle) % 360
+			points360[angle] = p
+		}
+		mu.Unlock()
+		broadcastPoints()
 	}
-
-	img.Close()
-	imgMap.Close()
-}
-
-	}()
-
-	// go func() {
-	// 	router := gin.Default()
-	// 	router.GET("/ping", func(c *gin.Context){
-	// 		c.JSON(http.StatusOK, gin.H{
-	// 			"message": "pong",
-	// 		})
-	// 	})
-	// 	router.Run()
-	// } ()
-	select {}
 }

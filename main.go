@@ -64,7 +64,7 @@ func broadcastPoints() {
 }
 
 func main() {
-	lidar, err := lidardriver.NewLD06Driver("/dev/ttyUSB1")
+	lidar, err := lidardriver.NewLD06Driver("/dev/ttyUSB0")
 	if err != nil {
 		panic(err)
 	}
